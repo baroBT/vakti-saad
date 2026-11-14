@@ -10,6 +10,7 @@ orientation = portrait
 fullscreen = 0
 icon.filename = icon.png
 android.archs = arm64-v8a
+android.accept_sdk_license = True
 android.permissions = INTERNET,POST_NOTIFICATIONS
 android.api = 31
 android.minapi = 21
