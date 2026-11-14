@@ -14,9 +14,10 @@ from kivy.properties import StringProperty, BooleanProperty
 from kivy.storage.jsonstore import JsonStore
 
 try:
-    import requests
+    import urllib.request
+    import urllib.parse
 except:
-    requests = None
+    urllib = None
 
 try:
     from plyer import notification
@@ -45,7 +46,6 @@ AYETLER = [
 
 CACHE_DOSYA = "vakit_cache.json"
 
-# ---------- OFFLINE HESAP (temkinli, Diyanet'e yakın) ----------
 def vakitleri_hesapla_offline(enlem, boylam, tarih=None):
     if tarih is None:
         tarih = datetime.now()
@@ -71,22 +71,17 @@ def vakitleri_hesapla_offline(enlem, boylam, tarih=None):
     imsak_h = saat_hesapla(-18)
     yatsi_h = saat_hesapla(-17)
 
-    # Temkin değerleri (dakika) - Diyanet'e yaklaştırır
-    imsak = yap(ogle_saat - imsak_h)
-    gunes = yap(ogle_saat - gunes_h) - timedelta(minutes=7)
-    ogle = yap(ogle_saat + 0.08) + timedelta(minutes=5)
-    ikindi = yap(ogle_saat + gunes_h * 0.55 + 0.3) + timedelta(minutes=4)
-    aksam = yap(ogle_saat + gunes_h) + timedelta(minutes=7)
-    yatsi = yap(ogle_saat + yatsi_h)
-
     return {
-        "İmsak": imsak, "Güneş": gunes, "Öğle": ogle,
-        "İkindi": ikindi, "Akşam": aksam, "Yatsı": yatsi,
+        "İmsak": yap(ogle_saat - imsak_h),
+        "Güneş": yap(ogle_saat - gunes_h) - timedelta(minutes=7),
+        "Öğle": yap(ogle_saat + 0.08) + timedelta(minutes=5),
+        "İkindi": yap(ogle_saat + gunes_h * 0.55 + 0.3) + timedelta(minutes=4),
+        "Akşam": yap(ogle_saat + gunes_h) + timedelta(minutes=7),
+        "Yatsı": yap(ogle_saat + yatsi_h),
     }
 
-# ---------- ALADHAN (online, Diyanet method=13) ----------
 def aladhan_cek(sehir, tarih=None):
-    if requests is None:
+    if urllib is None:
         return None
     if tarih is None:
         tarih = datetime.now()
@@ -94,10 +89,10 @@ def aladhan_cek(sehir, tarih=None):
         url = (
             f"https://api.aladhan.com/v1/timingsByCity/"
             f"{tarih.strftime('%d-%m-%Y')}"
-            f"?city={sehir}&country=Turkey&method=13"
+            f"?city={urllib.parse.quote(sehir)}&country=Turkey&method=13"
         )
-        r = requests.get(url, timeout=8)
-        data = r.json()
+        with urllib.request.urlopen(url, timeout=8) as r:
+            data = json.loads(r.read().decode())
         t = data["data"]["timings"]
         def parse(s):
             s = s.split(" ")[0]
@@ -118,8 +113,8 @@ def cache_yaz(sehir, vakitler):
                 "vakitler": {k: v.strftime("%H:%M") for k, v in vakitler.items()}}
         with open(CACHE_DOSYA, "w") as f:
             json.dump(data, f)
-    except Exception as e:
-        print("Cache yaz hata:", e)
+    except:
+        pass
 
 def cache_oku(sehir):
     try:
@@ -149,18 +144,12 @@ def bildirim_gonder(baslik, mesaj):
     if notification:
         try:
             notification.notify(title=baslik, message=mesaj, app_name="Vakt-i Saad", timeout=5)
-        except Exception as e:
-            print(e)
+        except:
+            pass
 
-# ---------- RAMAZAN (yaklaşık hicri hesap) ----------
 def ramazan_durumu():
-    """Ramazan ayında mıyız, kaç gün kaldı? (yaklaşık hesap)"""
     simdi = datetime.now()
-    # Hicri yıl yaklaşık: (miladi - 622) * 33/32
-    hicri_yil = int((simdi.year - 622) * 33 / 32)
-    # 1 Ramazan yaklaşık tarihi (her yıl 11 gün geri gelir)
-    # 2026 Ramazan: ~18 Şubat 2026 (yaklaşık)
-    ramazan_baslangic = datetime(simdi.year, 2, 18)  # yaklaşık
+    ramazan_baslangic = datetime(simdi.year, 2, 18)
     if simdi.month < 2 or (simdi.month == 2 and simdi.day < 18):
         ramazan_baslangic = datetime(simdi.year - 1, 3, 1)
     ramazan_bitis = ramazan_baslangic + timedelta(days=30)
@@ -289,7 +278,7 @@ class AnaEkran(BoxLayout):
         if cached:
             self.vakitler = cached
             self.vakit_listesi_guncelle()
-            self.kaynak_text = "Önbellekten (internet bekleniyor)"
+            self.kaynak_text = "Önbellekten"
         threading.Thread(target=self._online_cek, args=(app.enlem, app.boylam, sehir), daemon=True).start()
 
     def _online_cek(self, enlem, boylam, sehir):
@@ -305,13 +294,13 @@ class AnaEkran(BoxLayout):
     def _online_basarili(self, v):
         self.vakitler = v
         self.vakit_listesi_guncelle()
-        self.kaynak_text = "🌐 Aladhan (Diyanet method=13)"
+        self.kaynak_text = "🌐 Aladhan (Diyanet)"
 
     @mainthread
     def _offline_basarili(self, v):
         self.vakitler = v
         self.vakit_listesi_guncelle()
-        self.kaynak_text = "📴 Offline hesap (temkinli)"
+        self.kaynak_text = "📴 Offline (temkinli)"
 
     def vakit_listesi_guncelle(self):
         container = self.ids.vakit_listesi
@@ -350,16 +339,12 @@ class AnaEkran(BoxLayout):
             bildirim_gonder(f"{ad} Vakti", f"{ad} vakti geldi.")
             self.son_bildirim = f"{ad}_geldi"
 
-        # Ramazan
-        oruç, gun, kalan_gun = ramazan_durumu()
-        if oruç:
-            if ad == "İmsak" or (ad == "Akşam"):
-                pass
-            # İmsak/iftar sayacı
+        oruc, gun, kalan_gun = ramazan_durumu()
+        if oruc:
             if simdi < self.vakitler["İmsak"]:
-                self.ramazan_text = f"🌙 Sahura {self.kalan_sure_hesapla(self.vakitler['İmsak'])} kaldı (Ramazan {gun}. gün)"
+                self.ramazan_text = f"🌙 Sahura {self.kalan_sure_hesapla(self.vakitler['İmsak'])} (Ramazan {gun}. gün)"
             elif simdi < self.vakitler["Akşam"]:
-                self.ramazan_text = f"🌙 İftara {self.kalan_sure_hesapla(self.vakitler['Akşam'])} kaldı (Ramazan {gun}. gün)"
+                self.ramazan_text = f"🌙 İftara {self.kalan_sure_hesapla(self.vakitler['Akşam'])} (Ramazan {gun}. gün)"
             else:
                 self.ramazan_text = f"🌙 Ramazan {gun}. gün | Yarın imsak: {self.vakitler['İmsak'].strftime('%H:%M')}"
         else:
